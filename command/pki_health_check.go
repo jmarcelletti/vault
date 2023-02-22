@@ -235,10 +235,6 @@ func (c *PKIHealthCheckCommand) Run(args []string) int {
 		config := map[string]map[string]interface{}{}
 		for _, checker := range executor.Checkers {
 			config[checker.Name()] = checker.DefaultConfig()
-			// When generating the configuration, add the defaults for the enabled flag
-			if _, exists := config[checker.Name()]["enabled"]; !exists {
-				config[checker.Name()]["enabled"] = true
-			}
 		}
 
 		marshaled, err := json.MarshalIndent(config, "", "  ")

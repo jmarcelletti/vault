@@ -13,6 +13,7 @@ type HardwareBackedRoot struct {
 
 	UnsupportedVersion bool
 
+	FetchIssues  map[string]*PathFetch
 	IssuerKeyMap map[string]string
 	KeyIsManaged map[string]string
 }
@@ -49,6 +50,7 @@ func (h *HardwareBackedRoot) LoadConfig(config map[string]interface{}) error {
 }
 
 func (h *HardwareBackedRoot) FetchResources(e *Executor) error {
+	// unauth'd endpoint, so no need to worry about perm issue
 	exit, _, issuers, err := pkiFetchIssuersList(e, func() {
 		h.UnsupportedVersion = true
 	})
@@ -64,6 +66,7 @@ func (h *HardwareBackedRoot) FetchResources(e *Executor) error {
 			if err != nil {
 				return err
 			}
+			h.FetchIssues[issuer] = ret
 			continue
 		}
 
@@ -83,13 +86,15 @@ func (h *HardwareBackedRoot) FetchResources(e *Executor) error {
 		}
 
 		h.IssuerKeyMap[issuer] = keyId
-		skip, _, keyEntry, err := pkiFetchKeyEntry(e, keyId, func() {
+		skip, ret, keyEntry, err := pkiFetchKeyEntry(e, keyId, func() {
 			h.UnsupportedVersion = true
 		})
 		if skip || err != nil || keyEntry == nil {
 			if err != nil {
 				return err
 			}
+
+			h.FetchIssues[issuer] = ret
 			continue
 		}
 
@@ -110,6 +115,26 @@ func (h *HardwareBackedRoot) Evaluate(e *Executor) (results []*Result, err error
 			Message:  "This health check requires Vault 1.11+ but an earlier version of Vault Server was contacted, preventing this health check from running.",
 		}
 		return []*Result{&ret}, nil
+	}
+
+	// Did we encounter any permission issues with an issuer
+	for issuer, fetchPath := range h.FetchIssues {
+		if fetchPath != nil && fetchPath.IsSecretPermissionsError() {
+			delete(h.IssuerKeyMap, issuer)
+			ret := Result{
+				Status:   ResultInsufficientPermissions,
+				Endpoint: fetchPath.Path,
+				Message:  "Without this information, this health check is unable to function.",
+			}
+
+			if e.Client.Token() == "" {
+				ret.Message = "No token available so unable for the endpoint for this mount. " + ret.Message
+			} else {
+				ret.Message = "This token lacks permission for the endpoint for this mount. " + ret.Message
+			}
+
+			results = append(results, &ret)
+		}
 	}
 
 	for name, keyId := range h.IssuerKeyMap {
