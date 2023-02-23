@@ -284,7 +284,6 @@ func (c *Client) retryOCSP(
 	reqBody []byte,
 	issuer *x509.Certificate,
 ) (ocspRes *ocsp.Response, ocspResBytes []byte, ocspS *ocspStatus, err error) {
-	origHost := *ocspHost
 	doRequest := func(request *retryablehttp.Request) (*http.Response, error) {
 		if err != nil {
 			return nil, err
@@ -303,38 +302,64 @@ func (c *Client) retryOCSP(
 		return res, err
 	}
 
-	ocspHost.Path = ocspHost.Path + "/" + base64.StdEncoding.EncodeToString(reqBody)
-	var res *http.Response
-	request, err := req("GET", ocspHost.String(), nil)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if res, err = doRequest(request); err != nil {
-		return nil, nil, nil, err
-	} else {
-		defer res.Body.Close()
-	}
-	if res.StatusCode == http.StatusMethodNotAllowed {
-		request, err := req("POST", origHost.String(), bytes.NewBuffer(reqBody))
+	methods := []string{"GET", "POST"}
+	for methodIndex, method := range methods {
+		reqUrl := *ocspHost
+		var body []byte
+
+		switch method {
+		case "GET":
+			reqUrl.Path = reqUrl.Path + "/" + base64.StdEncoding.EncodeToString(reqBody)
+		case "POST":
+			body = reqBody
+		default:
+			return nil, nil, nil, fmt.Errorf("unknown request method: %v", method)
+		}
+
+		var res *http.Response
+		request, err := req(method, reqUrl.String(), bytes.NewBuffer(body))
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		if res, err := doRequest(request); err != nil {
+		if res, err = doRequest(request); err != nil {
 			return nil, nil, nil, err
 		} else {
 			defer res.Body.Close()
 		}
-	}
-	if res.StatusCode != http.StatusOK {
-		return nil, nil, nil, fmt.Errorf("HTTP code is not OK. %v: %v", res.StatusCode, res.Status)
-	}
-	ocspResBytes, err = io.ReadAll(res.Body)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	ocspRes, err = ocsp.ParseResponse(ocspResBytes, issuer)
-	if err != nil {
-		return nil, nil, nil, err
+
+		if res.StatusCode != http.StatusOK {
+			if methodIndex < len(methods)-1 {
+				continue
+			} else {
+				return nil, nil, nil, fmt.Errorf("HTTP code is not OK. %v: %v", res.StatusCode, res.Status)
+			}
+		}
+
+		// Body reading errors should always be fatal.
+		ocspResBytes, err = io.ReadAll(res.Body)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+
+		// Reading an OCSP response shouldn't be fatal if this is the first
+		// request. A misconfigured endpoint might return invalid results for
+		// e.g., GET but return valid results for POST on retry.
+		ocspRes, err = ocsp.ParseResponse(ocspResBytes, issuer)
+		if err != nil {
+			if methodIndex < len(methods)-1 {
+				continue
+			} else {
+				return nil, nil, nil, err
+			}
+		}
+
+		// While we haven't validated the signature on the OCSP response, we
+		// got what we presume is a definitive answer and simply changing
+		// methods will likely not help us in that regard. Use this status
+		// to return without retrying another method, when it looks definitive.
+		if ocspRes.Status == ocsp.Good || ocspRes.Status == ocsp.Revoked {
+			break
+		}
 	}
 
 	return ocspRes, ocspResBytes, &ocspStatus{
