@@ -21,6 +21,7 @@ type RootIssuedLeaves struct {
 
 func NewRootIssuedLeavesCheck() Check {
 	return &RootIssuedLeaves{
+		FetchIssues: make(map[string]*PathFetch),
 		RootCertMap: make(map[string]*x509.Certificate),
 		LeafCertMap: make(map[string]*x509.Certificate),
 	}

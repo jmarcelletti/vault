@@ -14,7 +14,7 @@ type TooManyCerts struct {
 	CountWarning  int
 
 	CertCounts int
-	Fetcher    *PathFetch
+	FetchIssue *PathFetch
 }
 
 func NewTooManyCertsCheck() Check {
@@ -61,7 +61,7 @@ func (h *TooManyCerts) FetchResources(e *Executor) error {
 	exit, leavesRet, _, err := pkiFetchLeavesList(e, func() {
 		h.UnsupportedVersion = true
 	})
-	h.Fetcher = leavesRet
+	h.FetchIssue = leavesRet
 
 	if exit || err != nil {
 		return err
@@ -83,10 +83,10 @@ func (h *TooManyCerts) Evaluate(e *Executor) (results []*Result, err error) {
 		return []*Result{&ret}, nil
 	}
 
-	if h.Fetcher.IsSecretPermissionsError() {
+	if h.FetchIssue != nil && h.FetchIssue.IsSecretPermissionsError() {
 		ret := Result{
 			Status:   ResultInsufficientPermissions,
-			Endpoint: "/{{mount}}/certs",
+			Endpoint: h.FetchIssue.Path,
 			Message:  "Without this information, this health check is unable to function.",
 		}
 

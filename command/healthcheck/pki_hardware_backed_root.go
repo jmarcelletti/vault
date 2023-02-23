@@ -20,6 +20,7 @@ type HardwareBackedRoot struct {
 
 func NewHardwareBackedRootCheck() Check {
 	return &HardwareBackedRoot{
+		FetchIssues:  make(map[string]*PathFetch),
 		IssuerKeyMap: make(map[string]string),
 		KeyIsManaged: make(map[string]string),
 	}
