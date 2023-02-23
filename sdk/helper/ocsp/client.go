@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/go-retryablehttp"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/hashicorp/vault/sdk/helper/certutil"
@@ -283,11 +284,8 @@ func (c *Client) retryOCSP(
 	headers map[string]string,
 	reqBody []byte,
 	issuer *x509.Certificate,
-) (ocspRes *ocsp.Response, ocspResBytes []byte, ocspS *ocspStatus, err error) {
+) (ocspRes *ocsp.Response, ocspResBytes []byte, ocspS *ocspStatus, retErr error) {
 	doRequest := func(request *retryablehttp.Request) (*http.Response, error) {
-		if err != nil {
-			return nil, err
-		}
 		if request != nil {
 			request = request.WithContext(ctx)
 			for k, v := range headers {
@@ -319,26 +317,34 @@ func (c *Client) retryOCSP(
 		var res *http.Response
 		request, err := req(method, reqUrl.String(), bytes.NewBuffer(body))
 		if err != nil {
-			return nil, nil, nil, err
+			err = fmt.Errorf("error creating %v request: %w", method, err)
+			retErr = multierror.Append(retErr, err)
+			return nil, nil, nil, retErr
 		}
 		if res, err = doRequest(request); err != nil {
-			return nil, nil, nil, err
+			err = fmt.Errorf("error doing %v request: %w", method, err)
+			retErr = multierror.Append(retErr, err)
+			return nil, nil, nil, retErr
 		} else {
 			defer res.Body.Close()
 		}
 
 		if res.StatusCode != http.StatusOK {
+			err = fmt.Errorf("HTTP code is not OK on %v request. %v: %v", method, res.StatusCode, res.Status)
+			retErr = multierror.Append(retErr, err)
 			if methodIndex < len(methods)-1 {
 				continue
 			} else {
-				return nil, nil, nil, fmt.Errorf("HTTP code is not OK. %v: %v", res.StatusCode, res.Status)
+				return nil, nil, nil, retErr
 			}
 		}
 
 		// Body reading errors should always be fatal.
 		ocspResBytes, err = io.ReadAll(res.Body)
 		if err != nil {
-			return nil, nil, nil, err
+			err = fmt.Errorf("error reading %v request body: %w", method, err)
+			retErr = multierror.Append(retErr, err)
+			return nil, nil, nil, retErr
 		}
 
 		// Reading an OCSP response shouldn't be fatal if this is the first
@@ -346,10 +352,12 @@ func (c *Client) retryOCSP(
 		// e.g., GET but return valid results for POST on retry.
 		ocspRes, err = ocsp.ParseResponse(ocspResBytes, issuer)
 		if err != nil {
+			err = fmt.Errorf("error parsing %v OCSP response: %w", method, err)
+			retErr = multierror.Append(retErr, err)
 			if methodIndex < len(methods)-1 {
 				continue
 			} else {
-				return nil, nil, nil, err
+				return nil, nil, nil, retErr
 			}
 		}
 
@@ -358,6 +366,9 @@ func (c *Client) retryOCSP(
 		// methods will likely not help us in that regard. Use this status
 		// to return without retrying another method, when it looks definitive.
 		if ocspRes.Status == ocsp.Good || ocspRes.Status == ocsp.Revoked {
+			// Clear retErr even though we don't return it below, in case
+			// that changes.
+			retErr = nil
 			break
 		}
 	}
