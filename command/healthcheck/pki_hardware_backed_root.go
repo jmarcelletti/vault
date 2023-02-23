@@ -51,7 +51,6 @@ func (h *HardwareBackedRoot) LoadConfig(config map[string]interface{}) error {
 }
 
 func (h *HardwareBackedRoot) FetchResources(e *Executor) error {
-	// unauth'd endpoint, so no need to worry about perm issue
 	exit, _, issuers, err := pkiFetchIssuersList(e, func() {
 		h.UnsupportedVersion = true
 	})
@@ -118,7 +117,6 @@ func (h *HardwareBackedRoot) Evaluate(e *Executor) (results []*Result, err error
 		return []*Result{&ret}, nil
 	}
 
-	// Did we encounter any permission issues with an issuer
 	for issuer, fetchPath := range h.FetchIssues {
 		if fetchPath != nil && fetchPath.IsSecretPermissionsError() {
 			delete(h.IssuerKeyMap, issuer)
